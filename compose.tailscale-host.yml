@@ -1,0 +1,11 @@
+# For a host already running Tailscale. Add after compose.komodo.yml.
+# TAILSCALE_ADDRESS is the host's tailscale0 IPv4 address, not a container IP.
+# Compose keeps the base loopback bindings and adds these tailnet-only bindings.
+services:
+  app:
+    ports:
+      - '${TAILSCALE_ADDRESS:?Set the host Tailscale IPv4 address}:3300:3000'
+  renderer:
+    ports:
+      - '${TAILSCALE_ADDRESS:?Set the host Tailscale IPv4 address}:3301:3000'
+      - '${TAILSCALE_ADDRESS:?Set the host Tailscale IPv4 address}:3302:3001'

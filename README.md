@@ -84,6 +84,10 @@ The video config export contains complete CSDM `Sequence` objects, including pla
 
 ### Private Tailscale access
 
+If the Docker host already runs Tailscale, add `compose.tailscale-host.yml` after `compose.komodo.yml` and set `TAILSCALE_ADDRESS` to its `tailscale0` IPv4 address. This retains localhost access and publishes ports 3300–3302 only on that Tailscale address. Use the existing host Tailscale hostname on those ports; no new device or authentication is needed. Do not use an address belonging to a separate Tailscale container.
+
+For a dedicated Tailscale node instead:
+
 Add `compose.tailscale.yml` after `compose.komodo.yml` in Komodo's File Paths. The overlay adds a dedicated Tailscale node and a proxy sharing its network namespace. It publishes no additional host ports, uses userspace networking without host networking or extra capabilities, and leaves the existing host Tailscale setup intact.
 
 On first startup, open the authentication URL from the `tailscale` service logs and approve `csdm-docker` in the tailnet used by your computer. Its identity persists in `tailscale-state`. The logs show the assigned DNS name; HTTPS must be enabled in that tailnet. Open `https://<assigned-name>/` for the app and `https://<assigned-name>:8443/` for the Steam desktop. Existing API/session authentication and desktop credentials still apply. Funnel is not enabled.
