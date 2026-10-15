@@ -1,5 +1,14 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { sql } from 'kysely';
+import { db } from 'csdm/node/database/database';
+import {
+  buildRenderSequence,
+  fetchRenderJobs,
+  getRenderedVideoPath,
+  queueHighlightRender,
+} from 'csdm/node/web-server/render-queue';
 import fs from 'fs-extra';
 import { watch } from 'chokidar';
 import { fetchMatchesTable } from 'csdm/node/database/matches/fetch-matches-table';
@@ -26,7 +35,7 @@ import {
   buildSetSessionCookieHeader,
   getSessionSteamId,
 } from 'csdm/node/web-server/session';
-import { fetchShareCodeJobs, queueShareCode } from 'csdm/node/web-server/share-code-queue';
+import { fetchShareCodeJobs, queueShareCode, retryFailedShareCodeJobs } from 'csdm/node/web-server/share-code-queue';
 import {
   checkTrackedUser,
   fetchTrackedUsers,
@@ -66,7 +75,8 @@ function sendJson(response: ServerResponse, statusCode: number, value: unknown) 
 }
 
 function clampInt(raw: string | null, min: number, max: number, fallback: number) {
-  const parsed = Number(raw ?? '');
+  if (raw === null || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed)) {
     return fallback;
   }
@@ -139,7 +149,7 @@ export async function startWebServer(options: WebServerOptions) {
   const { port, inboxFolderPath, apiToken, maxUploadBytes, publicUrl, sessionSecret, steamApiKey } = options;
   await fs.ensureDir(inboxFolderPath);
 
-  const watcher = watch(path.join(inboxFolderPath, '**/*.dem'), {
+  const watcher = watch([inboxFolderPath, ...(process.env.SERVER_DEMOS_DIR ? [process.env.SERVER_DEMOS_DIR] : [])], {
     ignoreInitial: false,
     awaitWriteFinish: {
       stabilityThreshold: 2000,
@@ -276,13 +286,84 @@ export async function startWebServer(options: WebServerOptions) {
         return;
       }
 
+      if (request.method === 'GET' && url.pathname === '/health') {
+        await sql`SELECT 1`.execute(db);
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
       if (!isAuthorized(request, apiToken, sessionSecret)) {
         sendJson(response, 401, { error: 'Invalid or missing API token' });
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/status') {
-        sendJson(response, 200, { ...getQueueStatus(), discord: isDiscordEnabled() });
+        sendJson(response, 200, {
+          ...getQueueStatus(),
+          discord: isDiscordEnabled(),
+          downloadsConfigured:
+            Boolean(process.env.STEAM_REFRESH_TOKEN) ||
+            (await fs.pathExists(process.env.STEAM_REFRESH_TOKEN_FILE || '/data/steam/refresh-token')),
+          trackingConfigured: steamApiKey !== '',
+        });
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/share-codes/retry') {
+        await retryFailedShareCodeJobs();
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/render-jobs') {
+        sendJson(response, 200, { jobs: await fetchRenderJobs() });
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/render-jobs') {
+        const body = await readJsonBody(request);
+        if (
+          typeof body.checksum !== 'string' ||
+          typeof body.steamId !== 'string' ||
+          !isValidSteamId(body.steamId) ||
+          !Number.isSafeInteger(body.roundNumber) ||
+          Number(body.roundNumber) <= 0
+        ) {
+          sendJson(response, 400, { error: 'Provide checksum, roundNumber, and a player Steam ID.' });
+          return;
+        }
+        sendJson(response, 202, {
+          job: await queueHighlightRender(body.checksum, Number(body.roundNumber), body.steamId),
+        });
+        return;
+      }
+
+      const renderedVideo = /^\/api\/render-jobs\/([a-f0-9-]{36})\/video$/.exec(url.pathname);
+      if (request.method === 'GET' && renderedVideo) {
+        const id = renderedVideo[1];
+        const job = await sql<{ status: string }>`SELECT status FROM serve_render_jobs WHERE id = ${id}`.execute(db);
+        if (job.rows[0]?.status !== 'completed') {
+          sendJson(response, 404, { error: 'Video is not ready.' });
+          return;
+        }
+        const file = getRenderedVideoPath(id);
+        const { size } = await fs.stat(file);
+        const range = request.headers.range;
+        const match = range ? /^bytes=(\d+)-(\d*)$/.exec(range) : null;
+        const start = match ? Number(match[1]) : 0;
+        const end = match && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+        if ((range && !match) || start > end || start >= size) {
+          response.writeHead(416, { 'content-range': `bytes */${size}` });
+          response.end();
+          return;
+        }
+        response.writeHead(match ? 206 : 200, {
+          'content-type': 'video/mp4',
+          'accept-ranges': 'bytes',
+          'content-length': end - start + 1,
+          ...(match ? { 'content-range': `bytes ${start}-${end}/${size}` } : {}),
+        });
+        await pipeline(fs.createReadStream(file, { start, end }), response);
         return;
       }
 
@@ -454,6 +535,27 @@ export async function startWebServer(options: WebServerOptions) {
         return;
       }
 
+      if (request.method === 'GET' && url.pathname.startsWith('/api/matches/') && url.pathname.endsWith('/demo')) {
+        const checksum = getMatchChecksumFromSuffix('/demo');
+        if (!/^[a-z0-9]+$/i.test(checksum)) {
+          sendJson(response, 400, { error: 'Invalid checksum.' });
+          return;
+        }
+        const match = await db
+          .selectFrom('matches')
+          .select('demo_path')
+          .where('checksum', '=', checksum)
+          .executeTakeFirstOrThrow();
+        const { size } = await fs.stat(match.demo_path);
+        response.writeHead(200, {
+          'content-type': 'application/octet-stream',
+          'content-length': size,
+          'content-disposition': `attachment; filename="${checksum}.dem"`,
+        });
+        await pipeline(fs.createReadStream(match.demo_path), response);
+        return;
+      }
+
       if (request.method === 'GET' && url.pathname.startsWith('/api/matches/') && url.pathname.endsWith('/weapons')) {
         sendJson(response, 200, { weapons: await fetchMatchWeapons(getMatchChecksumFromSuffix('/weapons')) });
         return;
@@ -486,11 +588,22 @@ export async function startWebServer(options: WebServerOptions) {
       ) {
         const checksum = decodeURIComponent(url.pathname.slice('/api/matches/'.length, -'/clips/export'.length));
         const sequences = await fetchMatchHighlightSequences(checksum);
+        const config = {
+          demoPath: `${checksum}.dem`,
+          trueView: false,
+          recordingSystem: 'CS',
+          recordingOutput: 'video',
+          encoderSoftware: 'FFmpeg',
+          width: 1920,
+          height: 1080,
+          framerate: 30,
+          sequences: sequences.map(buildRenderSequence),
+        };
         response.writeHead(200, {
           'content-type': 'application/json',
           'content-disposition': `attachment; filename="highlights-${checksum}.json"`,
         });
-        response.end(JSON.stringify({ checksum, sequences }, null, 2));
+        response.end(JSON.stringify(config, null, 2));
         return;
       }
 
@@ -655,9 +768,10 @@ export async function startWebServer(options: WebServerOptions) {
         await fs.ensureDir(targetFolder);
         const demoPath = path.join(targetFolder, `${Date.now()}-${filename}`);
         try {
-          await writeStreamToFile(request, demoPath, maxUploadBytes);
+          await writeStreamToFile(request, `${demoPath}.part`, maxUploadBytes);
+          await fs.move(`${demoPath}.part`, demoPath);
         } catch (error) {
-          await fs.remove(demoPath).catch(() => undefined);
+          await fs.remove(`${demoPath}.part`).catch(() => undefined);
           throw error;
         }
         const stats = await fs.stat(demoPath);
@@ -674,6 +788,10 @@ export async function startWebServer(options: WebServerOptions) {
       sendJson(response, 404, { error: 'Not found' });
     } catch (error) {
       logger.error(error);
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
       sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }
   }

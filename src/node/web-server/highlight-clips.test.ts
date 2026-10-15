@@ -45,3 +45,34 @@ describe('computeClipWindow', () => {
     expect(window.startTick).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('highlight action boundaries', () => {
+  it('preserves all kill ticks when padding is asymmetric at the round boundary', () => {
+    const window = computeClipWindow({
+      roundStartTick: 4800,
+      roundEndTick: 20000,
+      firstKillTick: 5000,
+      lastKillTick: 7000,
+      tickrate: 64,
+      paddingSeconds: 100,
+      maxSeconds: 45,
+    });
+    expect(window.startTick).toBeLessThanOrEqual(5000);
+    expect(window.endTick).toBeGreaterThanOrEqual(7000);
+    expect(window.endTick - window.startTick).toBeLessThanOrEqual(45 * 64);
+  });
+
+  it('keeps the last kill when the action exceeds the maximum clip length', () => {
+    const window = computeClipWindow({
+      roundStartTick: 0,
+      roundEndTick: 20000,
+      firstKillTick: 1000,
+      lastKillTick: 15000,
+      tickrate: 64,
+      paddingSeconds: 6,
+      maxSeconds: 90,
+    });
+    expect(window.endTick).toBe(15000);
+    expect(window.endTick - window.startTick).toBe(90 * 64);
+  });
+});

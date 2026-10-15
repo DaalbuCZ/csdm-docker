@@ -40,7 +40,7 @@ class Logger implements ILogger {
     // process.type => undefined in production build
     // This flag has been added after noticing that on Windows, logging the insertion of many demos NOT already in the
     // database (tested with 256 demos) it blocks the WebSocket server process in production build.
-    this.shouldLogToGlobalConsole = IS_DEV || process.type === 'renderer';
+    this.shouldLogToGlobalConsole = IS_DEV || process.type === 'renderer' || process.env.CSDM_LOG_STDOUT === '1';
     if (process.env.PROCESS_NAME === 'cli' && !process.argv.includes('--verbose')) {
       this.isVerbose = false;
     }

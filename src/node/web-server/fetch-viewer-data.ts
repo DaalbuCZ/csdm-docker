@@ -23,7 +23,15 @@ export async function fetchViewerPositions(
   tickStride: number,
 ): Promise<ViewerPosition[]> {
   const rows = await db
-    .selectFrom('player_positions')
+    .selectFrom((qb) =>
+      qb
+        .selectFrom('player_positions')
+        .selectAll()
+        .select(sql<number>`dense_rank() over (order by tick)`.as('sample_index'))
+        .where('match_checksum', '=', checksum)
+        .where('round_number', '=', roundNumber)
+        .as('sampled'),
+    )
     .select([
       'tick',
       'player_steam_id as steamId',
@@ -38,7 +46,7 @@ export async function fetchViewerPositions(
     ])
     .where('match_checksum', '=', checksum)
     .where('round_number', '=', roundNumber)
-    .where(sql`tick % ${tickStride}`, '=', 0)
+    .where(sql`(sample_index - 1) % ${tickStride}`, '=', 0)
     .orderBy('tick')
     .orderBy('player_steam_id')
     .execute();
@@ -271,7 +279,7 @@ export async function fetchViewerGrenades(
       y: number;
       id: string;
       hull: string;
-    }>`SELECT tick, x, y, unique_id AS id, convex_hull_2d AS hull FROM inferno_positions WHERE match_checksum = ${checksum} AND round_number = ${roundNumber} AND tick % ${tickStride} = 0 ORDER BY tick`.execute(
+    }>`SELECT tick, x, y, unique_id AS id, convex_hull_2d AS hull FROM (SELECT *, row_number() over (partition by unique_id order by tick) AS sample_index FROM inferno_positions WHERE match_checksum = ${checksum} AND round_number = ${roundNumber}) sampled WHERE (sample_index - 1) % ${tickStride} = 0 ORDER BY tick`.execute(
       db,
     ),
     sql<{
@@ -280,7 +288,7 @@ export async function fetchViewerGrenades(
       name: string;
       x: number;
       y: number;
-    }>`SELECT tick, projectile_id AS id, grenade_name AS name, x, y FROM grenade_positions WHERE match_checksum = ${checksum} AND round_number = ${roundNumber} AND tick % ${tickStride} = 0 ORDER BY id, tick`.execute(
+    }>`SELECT tick, projectile_id AS id, grenade_name AS name, x, y FROM (SELECT *, row_number() over (partition by projectile_id order by tick) AS sample_index FROM grenade_positions WHERE match_checksum = ${checksum} AND round_number = ${roundNumber}) sampled WHERE (sample_index - 1) % ${tickStride} = 0 ORDER BY id, tick`.execute(
       db,
     ),
     sql<{

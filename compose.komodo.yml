@@ -1,0 +1,88 @@
+# Deploy this file as a Git-backed Komodo Stack on the existing CS2 host.
+# Generate the required secrets in Komodo's Environment before deployment.
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: csdm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a database password}
+    volumes:
+      - database:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d csdm']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.serve
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: csdm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a database password}
+      INBOX_DIR: /data/inbox
+      SERVER_DEMOS_DIR: /data/server-demos
+      CLIPS_DIR: /data/clips
+      STEAM_REFRESH_TOKEN_FILE: /data/steam/refresh-token
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
+      API_TOKEN: ${API_TOKEN:?Set an API token}
+      SESSION_SECRET: ${SESSION_SECRET:?Set a session secret}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3300}
+      TRACK_POLL_MINUTES: ${TRACK_POLL_MINUTES:-15}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:3300:3000'
+    volumes:
+      - inbox:/data/inbox
+      - clips:/data/clips:ro
+      - steam-auth:/data/steam
+      - ${CS2_SERVER_DIR:-/home/byttorrent/cs2/server}/game/csgo:/data/server-demos:ro
+
+  renderer:
+    build:
+      context: .
+      dockerfile: Dockerfile.serve
+      target: renderer
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: Europe/Prague
+      POSTGRES_HOST: db
+      POSTGRES_DB: csdm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a database password}
+      CLIPS_DIR: /data/clips
+      SHARED_CS2_DIR: /shared-cs2
+      CUSTOM_USER: csdm
+      PASSWORD: ${RENDER_DESKTOP_PASSWORD:?Set a Steam desktop password}
+      DRINODE: /dev/dri/renderD128
+    devices:
+      - /dev/dri:/dev/dri
+    shm_size: 2gb
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:3301:3000'
+      - '${BIND_ADDRESS:-127.0.0.1}:3302:3001'
+    volumes:
+      - renderer-config:/config
+      - inbox:/data/inbox:ro
+      - clips:/data/clips
+      - ${CS2_SERVER_DIR:-/home/byttorrent/cs2/server}:/shared-cs2:ro
+      - ${CS2_SERVER_DIR:-/home/byttorrent/cs2/server}/game/csgo:/data/server-demos:ro
+
+volumes:
+  database:
+  inbox:
+  clips:
+  steam-auth:
+  renderer-config:

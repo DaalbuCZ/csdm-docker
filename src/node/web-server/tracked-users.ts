@@ -133,7 +133,17 @@ async function setTrackedUserState(
   `.execute(db);
 }
 
-export async function checkTrackedUser(apiKey: string, steamId: string): Promise<string[]> {
+const checks = new Map<string, Promise<string[]>>();
+
+export function checkTrackedUser(apiKey: string, steamId: string): Promise<string[]> {
+  const existing = checks.get(steamId);
+  if (existing) return existing;
+  const check = runTrackedUserCheck(apiKey, steamId).finally(() => checks.delete(steamId));
+  checks.set(steamId, check);
+  return check;
+}
+
+async function runTrackedUserCheck(apiKey: string, steamId: string): Promise<string[]> {
   const result = await sql<TrackedUserRow>`
     SELECT steam_id, auth_code, latest_share_code, auto_download, status, error, last_check_at, new_matches_found
     FROM serve_tracked_users
@@ -157,12 +167,7 @@ export async function checkTrackedUser(apiKey: string, steamId: string): Promise
       maxCodes: 30,
     });
     for (const code of newCodes) {
-      try {
-        await queueShareCode(code, steamId);
-      } catch (error) {
-        logger.warn(`Skipping share code ${code} for ${steamId}`);
-        logger.warn(error instanceof Error ? error.message : String(error));
-      }
+      await queueShareCode(code, steamId);
     }
     const latest = newCodes.at(-1);
     await setTrackedUserState(steamId, 'ok', '', latest, newCodes.length);

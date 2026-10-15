@@ -9,32 +9,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN vp install --frozen-lockfile --ignore-scripts
 
-COPY src ./src
-COPY src/ui/icons ./assets/icons
 COPY static ./static
 COPY scripts/install-deps.mjs ./scripts/install-deps.mjs
 RUN node --input-type=module -e "import { installDemoAnalyzer, installBoilerWritter, installCounterStrikeVoiceExtractor } from './scripts/install-deps.mjs'; await Promise.all([installDemoAnalyzer(), installBoilerWritter(), installCounterStrikeVoiceExtractor()]);"
+COPY src ./src
+COPY src/ui/icons ./assets/icons
 COPY tsconfig.json ./
-RUN ./node_modules/.bin/esbuild src/cli/cli.ts --bundle --packages=external \
-  --alias:csdm=./src \
-  --define:IS_DEV=false --define:IS_PRODUCTION=true \
-  --define:APP_VERSION='"docker"' \
-  --define:process.env.STEAM_API_KEYS='""' \
-  --define:process.env.FACEIT_API_KEY='""' \
-  --define:REACT_STRICT_MODE_ENABLED=false \
-  --platform=node --format=cjs \
-  --outfile=/app/out/cli.cjs --log-level=warning
+COPY scripts/build-hosted.mjs ./scripts/build-hosted.mjs
+RUN node scripts/build-hosted.mjs
 
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim AS runtime
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production CSDM_LOG_STDOUT=1
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/out ./out
 COPY --from=build /app/assets ./assets
 COPY --from=build /app/static ./static
+COPY scripts/steam-login.mjs ./scripts/steam-login.mjs
 
 VOLUME ["/data/inbox"]
 ENV INBOX_DIR=/data/inbox
@@ -42,6 +36,18 @@ ENV INBOX_DIR=/data/inbox
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/api/status').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"
 
 CMD ["node", "out/cli.cjs", "serve"]
+
+FROM lscr.io/linuxserver/steam:latest AS renderer
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg procps pciutils mesa-utils vulkan-tools \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/node /usr/local/bin/node
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/out ./out
+COPY --from=build /app/static ./static
+COPY docker/renderer/run /custom-services.d/csdm/run
+COPY docker/renderer/init /custom-cont-init.d/10-csdm
+ENV CSDM_LOG_STDOUT=1

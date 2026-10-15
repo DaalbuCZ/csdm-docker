@@ -4,7 +4,7 @@ import { startWebServer } from 'csdm/node/web-server/start-web-server';
 import { createDatabaseConnection } from 'csdm/node/database/database';
 import { migrateDatabase } from 'csdm/node/database/migrations/migrate-database';
 import { ensureServeTables } from 'csdm/node/web-server/serve-tables';
-import { setShareCodeInboxFolder } from 'csdm/node/web-server/share-code-queue';
+import { resumeShareCodeQueue, setShareCodeInboxFolder } from 'csdm/node/web-server/share-code-queue';
 import { checkAllTrackedUsers } from 'csdm/node/web-server/tracked-users';
 import { setServeConfig } from 'csdm/node/web-server/serve-config';
 
@@ -98,6 +98,7 @@ export class ServeCommand extends Command {
     await migrateDatabase();
     await ensureServeTables();
     setShareCodeInboxFolder(this.inboxFolderPath);
+    await resumeShareCodeQueue();
     const publicUrl = this.publicUrl || `http://localhost:${this.port}`;
     setServeConfig({
       discordWebhookUrl: this.discordWebhookUrl,
@@ -125,9 +126,9 @@ export class ServeCommand extends Command {
     if (this.steamApiKey !== '' && this.trackPollMinutes > 0) {
       const intervalMs = this.trackPollMinutes * 60 * 1000;
       logger.log(`Checking tracked users for new matches every ${this.trackPollMinutes} minute(s)`);
-      void checkAllTrackedUsers(this.steamApiKey);
+      void checkAllTrackedUsers(this.steamApiKey).catch((error: unknown) => logger.error(error));
       setInterval(() => {
-        void checkAllTrackedUsers(this.steamApiKey);
+        void checkAllTrackedUsers(this.steamApiKey).catch((error: unknown) => logger.error(error));
       }, intervalMs);
     } else if (this.trackPollMinutes > 0) {
       logger.warn('STEAM_API_KEY is not set, automatic match tracking is disabled until it is configured.');
@@ -176,7 +177,7 @@ export class ServeCommand extends Command {
     if (process.env.DISCORD_WEBHOOK_URL) {
       this.discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL;
     }
-    const envClipPadding = Number(process.env.CLIP_PADDING_SECONDS ?? '');
+    const envClipPadding = Number(process.env.CLIP_PADDING_SECONDS ?? '6');
     if (Number.isSafeInteger(envClipPadding) && envClipPadding >= 0) {
       this.clipPaddingSeconds = envClipPadding;
     }
@@ -184,7 +185,7 @@ export class ServeCommand extends Command {
     if (Number.isSafeInteger(envClipMax) && envClipMax > 0) {
       this.clipMaxSeconds = envClipMax;
     }
-    const envPollMinutes = Number(process.env.TRACK_POLL_MINUTES ?? '');
+    const envPollMinutes = Number(process.env.TRACK_POLL_MINUTES ?? '15');
     if (Number.isSafeInteger(envPollMinutes) && envPollMinutes >= 0) {
       this.trackPollMinutes = envPollMinutes;
     }

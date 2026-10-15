@@ -58,10 +58,16 @@ export function computeClipWindow(args: {
     endTick = args.roundEndTick;
   }
   if (endTick - startTick > maxTicks) {
-    // Keep the kills, trim the padding symmetrically.
-    const overflow = endTick - startTick - maxTicks;
-    startTick += Math.ceil(overflow / 2);
-    endTick -= Math.floor(overflow / 2);
+    // Spend the length budget on the action before trimming context. If the
+    // action itself is too long, keep the final decisive kills in the clip.
+    const actionTicks = args.lastKillTick - args.firstKillTick;
+    const contextTicks = Math.max(0, maxTicks - actionTicks);
+    startTick = Math.max(args.roundStartTick, args.firstKillTick - Math.floor(contextTicks / 2));
+    endTick = Math.min(args.roundEndTick, startTick + maxTicks);
+    if (endTick < args.lastKillTick) {
+      endTick = Math.min(args.roundEndTick, args.lastKillTick);
+      startTick = Math.max(args.roundStartTick, endTick - maxTicks);
+    }
   }
   return { startTick, endTick };
 }
@@ -102,20 +108,23 @@ export async function fetchHighlightClip(
       WHERE match_checksum = ${checksum} AND round_number = ${roundNumber} AND killer_steam_id = ${killerSteamId}
       ORDER BY tick
     `.execute(db),
-    sql<{ won: boolean }>`
-      SELECT won FROM clutches
+    sql<{ won: boolean; tick: number; clutcher_name: string }>`
+      SELECT won, tick, clutcher_name FROM clutches
       WHERE match_checksum = ${checksum} AND round_number = ${roundNumber} AND clutcher_steam_id = ${killerSteamId}
       LIMIT 1
     `.execute(db),
   ]);
 
-  if (roundWindow === null || killsResult.rows.length === 0) {
+  if (roundWindow === null || (killsResult.rows.length === 0 && clutchResult.rows[0]?.won !== true)) {
     return null;
   }
 
   const ticks = killsResult.rows.map((row) => Number(row.tick));
-  const firstKillTick = ticks[0];
-  const lastKillTick = ticks.at(-1) ?? firstKillTick;
+  const firstKillTick = Math.min(
+    ticks[0] ?? roundWindow.endTick,
+    clutchResult.rows[0]?.won ? Number(clutchResult.rows[0].tick) : ticks[0],
+  );
+  const lastKillTick = ticks.at(-1) ?? roundWindow.endTick;
   const { startTick, endTick } = computeClipWindow({
     roundStartTick: roundWindow.startTick,
     roundEndTick: roundWindow.endTick,
@@ -130,7 +139,7 @@ export async function fetchHighlightClip(
     checksum,
     roundNumber,
     killerSteamId,
-    killerName: killsResult.rows[0].killer_name,
+    killerName: killsResult.rows[0]?.killer_name ?? clutchResult.rows[0]?.clutcher_name ?? '',
     kind: clutchResult.rows[0]?.won === true ? 'clutch' : 'multi-kill',
     killCount: ticks.length,
     startTick,
@@ -173,8 +182,8 @@ export async function fetchMatchHighlightSequences(checksum: string): Promise<Hi
       GROUP BY round_number, killer_steam_id, killer_name
       HAVING COUNT(*) >= 3
     `.execute(db),
-    sql<{ round_number: number; clutcher_steam_id: string; clutcher_name: string }>`
-      SELECT round_number, clutcher_steam_id, clutcher_name
+    sql<{ round_number: number; clutcher_steam_id: string; clutcher_name: string; tick: number }>`
+      SELECT round_number, clutcher_steam_id, clutcher_name, tick
       FROM clutches
       WHERE match_checksum = ${checksum} AND won = true
     `.execute(db),
@@ -241,14 +250,29 @@ export async function fetchMatchHighlightSequences(checksum: string): Promise<Hi
     );
   }
   for (const row of clutches.rows) {
-    const round = roundByNumber.get(Number(row.round_number));
-    if (round === undefined) {
+    const existing = sequences.find(
+      (sequence) =>
+        sequence.roundNumber === Number(row.round_number) && sequence.killerSteamId === row.clutcher_steam_id,
+    );
+    if (existing) {
+      existing.kind = 'clutch';
       continue;
     }
-    // Clutch kill ticks are unknown here; cover the back half of the round.
-    const midpoint = Math.floor((round.startTick + round.endTick) / 2);
-    push(Number(row.round_number), row.clutcher_steam_id, row.clutcher_name, 'clutch', midpoint, round.endTick);
+    const clip = await fetchHighlightClip(checksum, Number(row.round_number), row.clutcher_steam_id);
+    if (!clip) continue;
+    sequences.push({
+      number: number++,
+      checksum,
+      roundNumber: Number(row.round_number),
+      killerSteamId: row.clutcher_steam_id,
+      killerName: row.clutcher_name,
+      kind: 'clutch',
+      startTick: clip.startTick,
+      endTick: clip.endTick,
+    });
   }
 
-  return sequences.sort((a, b) => a.roundNumber - b.roundNumber);
+  return sequences
+    .sort((a, b) => a.roundNumber - b.roundNumber)
+    .map((sequence, index) => ({ ...sequence, number: index + 1 }));
 }

@@ -71,7 +71,11 @@ export async function fetchHighlights(
   const wantClutches = filter.kind === undefined || filter.kind === 'clutch';
   const wantMultiKills = filter.kind === undefined || filter.kind === 'multi-kill';
   const [clutches, threeKills, fourKills, fiveKills] = await Promise.all([
-    wantClutches ? searchClutches({ ...base, opponentCount: 1 }) : Promise.resolve([]),
+    wantClutches
+      ? Promise.all(([1, 2, 3, 4, 5] as const).map((opponentCount) => searchClutches({ ...base, opponentCount }))).then(
+          (groups) => groups.flat(),
+        )
+      : Promise.resolve([]),
     wantMultiKills ? searchMultiKills({ ...base, killCount: 3 }) : Promise.resolve([]),
     wantMultiKills ? searchMultiKills({ ...base, killCount: 4 }) : Promise.resolve([]),
     wantMultiKills ? searchMultiKills({ ...base, killCount: 5 }) : Promise.resolve([]),

@@ -568,7 +568,7 @@ async function renderMatch(view, checksum, sub, query) {
     initChatTab(checksum);
   } else if (sub === 'viewer') {
     body.innerHTML = '<div class="card"><h2>2D Viewer</h2><div id="viewerBox"><p class="muted">Loading viewer…</p></div></div>';
-    initViewer(checksum, match.mapName, match.game, rounds, kills, Number(query.round) || 0);
+    initViewer(checksum, match.mapName, match.game, rounds, kills, Number(query.round) || 0, query.steamId || '');
   } else {
     body.innerHTML = '<div class="card"><p class="muted">Unknown tab.</p></div>';
   }
@@ -752,7 +752,7 @@ async function renderDownloads(view) {
     '<textarea id="dCodes" rows="4" placeholder="CSGO-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"></textarea>' +
     '<div class="row" style="margin-top:8px"><input id="dSteam" placeholder="Attribute to Steam ID (optional)" value="' + esc(storedSteamId) + '" /><button id="dGo" style="flex:0 0 auto">Download & analyze</button></div>' +
     '<p id="dMsg" class="muted"></p></div>' +
-    '<div class="card"><h2>Download queue</h2><div id="djobs"><p class="muted">Loading…</p></div></div>';
+    '<div class="card"><h2>Download queue</h2><button id="dRetry" class="ghost">Retry failed downloads</button><div id="djobs"><p class="muted">Loading…</p></div></div>';
   const drawJobs = async () => {
     try {
       const { jobs } = await get('/api/share-codes');
@@ -765,6 +765,11 @@ async function renderDownloads(view) {
         (j.demoPath ? '<br/><span class="muted">' + esc(j.demoPath.split('/').pop()) + '</span>' : '') + '</div>'
       ).join('') || '<p class="muted">Queue is empty.</p>';
     } catch (e) { /* view may have changed */ }
+  };
+  $('dRetry').onclick = async () => {
+    const res = await fetch(base() + '/api/share-codes/retry', { method: 'POST', headers: headers(true) });
+    if (!res.ok) { $('dMsg').textContent = 'Could not retry downloads.'; return; }
+    await drawJobs();
   };
   $('dGo').onclick = async () => {
     const codes = $('dCodes').value.split(/\\s+/).map(s => s.trim()).filter(Boolean);
@@ -788,10 +793,10 @@ function highlightViewerLink(h) {
   return '#/matches/' + h.matchChecksum + '/viewer?round=' + h.roundNumber + steam;
 }
 async function renderHighlights(view) {
-  view.innerHTML = '<div class="card"><h2>Highlights</h2><p class="muted">Clutches and 3+ kill rounds. Watch opens the 2D replay at that round, Clip fetches the tick window for rendering, Export downloads HLAE-compatible sequences for full-quality video rendering.</p>' +
+  view.innerHTML = '<div class="card"><h2>Highlights</h2><p class="muted">Clutches and 3+ kill rounds. Watch plays the highlight window in 2D. Record .webm saves it in your browser; Render video queues a 1080p in-game MP4 on the Linux worker.</p>' +
     '<div class="row"><select id="hlKind"><option value="">Clutches + multikills</option><option value="clutch">Clutches only</option><option value="multi-kill">Multikills only</option></select>' +
     '<input id="hlMap" placeholder="Map, e.g. de_mirage" /><input id="hlLimit" type="number" min="1" max="200" value="50" style="flex:0 1 110px" /><button id="hlGo" style="flex:0 0 auto">Filter</button></div>' +
-    '<div id="hl"><p class="muted">Loading…</p></div></div>';
+    '<div id="hl"><p class="muted">Loading…</p></div></div><div class="card"><h2>Rendered videos</h2><div id="renderJobs">Loading…</div></div>';
   const draw = async () => {
     const params = new URLSearchParams();
     const steamId = (conn().steamId || '').trim();
@@ -803,8 +808,22 @@ async function renderHighlights(view) {
       const { highlights } = await get('/api/highlights?' + params.toString());
       $('hl').innerHTML = highlights.map(h =>
         '<div class="highlight"><span class="pill ' + (h.kind === 'clutch' ? 'green' : 'yellow') + '">' + h.kind + '</span> ' + esc(h.detail) + ' — <a href="#/matches/' + h.matchChecksum + '">' + esc(h.mapName) + ' R' + h.roundNumber + '</a><br/><span class="muted">' + esc(h.killerName) + ' · tick ' + h.tick + ' · ' + esc(String(h.date || '').slice(0, 10)) + '</span><br/>' +
-        '<span style="font-size:12px"><a href="' + highlightViewerLink(h) + '">Watch</a> · <a href="#" data-clip="' + h.matchChecksum + '|' + h.roundNumber + '|' + esc(h.killerSteamId || '') + '">Clip ticks</a> · <a href="' + base() + '/api/matches/' + h.matchChecksum + '/clips/export">Sequences JSON</a></span><span class="muted" data-clipmsg style="font-size:12px"></span></div>'
+        '<span style="font-size:12px"><a href="' + highlightViewerLink(h) + '">Watch</a> · <a href="#" data-clip="' + h.matchChecksum + '|' + h.roundNumber + '|' + esc(h.killerSteamId || '') + '">Clip ticks</a> · <a href="' + base() + '/api/matches/' + h.matchChecksum + '/clips/export">Video config</a> · <a href="#" data-render="' + h.matchChecksum + '|' + h.roundNumber + '|' + esc(h.killerSteamId || '') + '">Render video</a></span><span class="muted" data-clipmsg style="font-size:12px"></span></div>'
       ).join('') || '<p class="muted">No highlights yet.</p>';
+      $('hl').querySelectorAll('[data-render]').forEach(a => {
+        a.onclick = async (e) => {
+          e.preventDefault();
+          const [checksum, round, steamId] = a.dataset.render.split('|');
+          const msg = a.parentElement.parentElement.querySelector('[data-clipmsg]');
+          try {
+            const res = await fetch(base() + '/api/render-jobs', { method: 'POST', headers: headers(true), body: JSON.stringify({ checksum, roundNumber: Number(round), steamId }) });
+            const body = await res.json();
+            if (!res.ok) throw new Error(body.error || 'Could not queue video.');
+            if (msg) msg.textContent = ' Video queued. The Linux Steam worker must be running and logged in.';
+            await drawRenderJobs();
+          } catch (err) { if (msg) msg.textContent = ' ' + err.message; }
+        };
+      });
       $('hl').querySelectorAll('[data-clip]').forEach(a => {
         a.onclick = async (e) => {
           e.preventDefault();
@@ -819,8 +838,21 @@ async function renderHighlights(view) {
       });
     } catch (e) { $('hl').innerHTML = '<p class="muted">Failed to load: ' + esc(e.message) + '</p>'; }
   };
+  const drawRenderJobs = async () => {
+    const el = $('renderJobs');
+    if (!el) return;
+    try {
+      const { jobs } = await get('/api/render-jobs');
+      if (!el.isConnected) return;
+      el.innerHTML = jobs.map(job => '<div class="job"><span class="pill">' + esc(job.status) + '</span> Round ' + job.round_number +
+        (job.error ? '<p class="bad">' + esc(job.error) + '</p>' : '') +
+        (job.status === 'completed' ? '<p><a href="' + base() + '/api/render-jobs/' + job.id + '/video" target="_blank" rel="noopener">Play / download MP4</a></p>' : '') + '</div>').join('') || '<p class="muted">No rendered videos yet.</p>';
+    } catch (e) { if (el.isConnected) el.textContent = e.message; }
+  };
   $('hlGo').onclick = draw;
   await draw();
+  await drawRenderJobs();
+  viewTimer = setInterval(drawRenderJobs, 5000);
 }
 /* ---------- upload (Leetify-style auto-import hub) ---------- */
 const uploadJobs = [];
@@ -1054,20 +1086,20 @@ let viewerRecorder = null;
 function stopViewer() {
   if (viewerRecorder) { try { viewerRecorder.stop(); } catch (e) {} viewerRecorder = null; }
   if (!viewer) return;
-  if (viewer.raf) cancelAnimationFrame(viewer.raf);
+  pauseViewer();
   if (viewer.resizeHandler) window.removeEventListener('resize', viewer.resizeHandler);
   viewer = null;
 }
-function pauseViewer() { if (viewer) viewer.playing = false; }
-async function initViewer(checksum, mapName, game, rounds, kills, initialRound) {
+async function initViewer(checksum, mapName, game, rounds, kills, initialRound, clipSteamId) {
   const box = $('viewerBox');
   if (!box) return;
+  stopViewer();
   const sorted = [...rounds].sort((a, b) => a.number - b.number);
   box.innerHTML = '<div class="viewer-controls"><select id="vRound">' + sorted.map(r => '<option value="' + r.number + '">Round ' + r.number + '</option>').join('') + '</select>' +
     '<button id="vPlay">Play</button><input id="vSlider" type="range" min="0" max="0" value="0" /><select id="vSpeed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option><option value="0.5">0.5x</option></select>' +
     '<button id="vRecord" class="ghost" title="Record this round from the 2D viewer as a .webm clip">Record .webm</button>' +
     '<span id="vTick" class="muted"></span></div><canvas id="vCanvas" class="viewer"></canvas><div id="vFeed" class="killfeed"></div><p class="muted" id="vClipMsg" style="font-size:12px"></p>';
-  viewer = { checksum, mapName, game, rounds: sorted, kills, img: null, transform: null, byTick: new Map(), ticks: [], tickFloat: 0, playing: false, raf: 0, lastTs: 0, speed: 1, tickrate: 64, grenades: null, roundNumber: 0, startTick: 0, endTick: 0, resizeHandler: null };
+  viewer = { checksum, mapName, game, clipSteamId, loadId: 0, rounds: sorted, kills, img: null, transform: null, byTick: new Map(), ticks: [], tickFloat: 0, playing: false, raf: 0, lastTs: 0, speed: 1, tickrate: 64, grenades: null, roundNumber: 0, startTick: 0, endTick: 0, resizeHandler: null };
   if (!viewer.bombImgCached && typeof Image !== 'undefined') { viewer.bombImgCached = new Image(); viewer.bombImgCached.src = base() + '/static/icons/weapons/bomb-icon.svg'; }
   viewer.bombImg = viewer.bombImgCached;
   $('vRound').onchange = () => loadViewerRound(Number($('vRound').value));
@@ -1082,43 +1114,56 @@ async function initViewer(checksum, mapName, game, rounds, kills, initialRound) 
   await loadViewerRound(firstRound);
 }
 function toggleViewerRecording() {
-  if (!viewer) return;
+  if (!viewer || !viewer.ticks.length || !viewer.transform) return;
   const btn = $('vRecord');
   const msg = $('vClipMsg');
-  if (viewerRecorder) { try { viewerRecorder.stop(); } catch (e) {} return; }
+  if (viewerRecorder) { viewerRecorder.stop(); return; }
   const canvas = $('vCanvas');
   if (!canvas || !canvas.captureStream || typeof MediaRecorder === 'undefined') {
     if (msg) msg.textContent = 'Recording is not supported in this browser.';
     return;
   }
-  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+  const roundNumber = viewer.roundNumber;
+  const checksum = viewer.checksum;
   const chunks = [];
-  const rec = new MediaRecorder(canvas.captureStream(60), { mimeType: mime, videoBitsPerSecond: 8000000 });
-  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-  rec.onstop = () => {
-    viewerRecorder = null;
-    if (btn) btn.textContent = 'Record .webm';
-    if (msg) msg.textContent = 'Clip saved.';
-    const blob = new Blob(chunks, { type: 'video/webm' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'csdm-round-' + viewer.roundNumber + '.webm';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  };
-  viewerRecorder = rec;
+  let stream;
+  let rec;
   try {
+    const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(type => MediaRecorder.isTypeSupported(type));
+    if (!mime) throw new Error('WebM recording is not supported in this browser.');
+    pauseViewer();
+    viewer.tickFloat = viewer.startTick;
+    viewer.speed = 1;
+    $('vSpeed').value = '1';
+    drawViewerFrame();
+    stream = canvas.captureStream(30);
+    rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8000000 });
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      stream.getTracks().forEach(track => track.stop());
+      if (viewerRecorder === rec) viewerRecorder = null;
+      if (btn && btn.isConnected) btn.textContent = 'Record .webm';
+      if (msg && msg.isConnected) msg.textContent = chunks.length ? 'Clip saved.' : 'No video frames were recorded.';
+      if (!chunks.length) return;
+      const blob = new Blob(chunks, { type: rec.mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'csdm-' + checksum + '-round-' + roundNumber + '.webm';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    };
+    rec.onerror = () => { if (msg) msg.textContent = 'Video recording failed.'; if (rec.state !== 'inactive') rec.stop(); };
+    viewerRecorder = rec;
     rec.start(250);
+    if (btn) btn.textContent = 'Stop & save';
+    if (msg) msg.textContent = 'Recording round ' + roundNumber + '… saves automatically at the end.';
+    toggleViewerPlay();
   } catch (e) {
     viewerRecorder = null;
+    if (stream) stream.getTracks().forEach(track => track.stop());
     if (msg) msg.textContent = 'Could not start recording: ' + e.message;
-    return;
   }
-  if (btn) btn.textContent = 'Stop & save';
-  if (msg) msg.textContent = 'Recording round ' + viewer.roundNumber + '… press Stop & save when done.';
-  if (!viewer.playing) toggleViewerPlay();
 }
 function fitViewerCanvas() {
   if (!viewer) return 640;
@@ -1135,12 +1180,21 @@ function fitViewerCanvas() {
 async function loadViewerRound(roundNumber) {
   if (!viewer) return;
   pauseViewer();
+  if (viewerRecorder && viewerRecorder.state !== 'inactive') viewerRecorder.stop();
+  const current = viewer;
+  const loadId = ++current.loadId;
+  current.ticks = [];
+  current.byTick = new Map();
+  current.transform = null;
+  current.grenades = null;
   const box = $('viewerBox');
   try {
     const [{ positions, tickrate, grenades, shots }, { map }] = await Promise.all([
       get('/api/matches/' + encodeURIComponent(viewer.checksum) + '/positions?round=' + roundNumber),
       get('/api/maps?game=' + encodeURIComponent(viewer.game || 'cs2') + '&name=' + encodeURIComponent(viewer.mapName || '')),
     ]);
+    if (viewer !== current || current.loadId !== loadId) return;
+    if (!map) throw new Error('Map radar or transform is unavailable.');
     viewer.shots = shots || [];
     viewer.tracerSeen = new Set();
     viewer.tracers = [];
@@ -1155,13 +1209,21 @@ async function loadViewerRound(roundNumber) {
     const round = viewer.rounds.find(r => r.number === roundNumber);
     viewer.startTick = viewer.ticks[0];
     viewer.endTick = (round && (round.endOfficiallyTick || round.endTick)) || viewer.ticks[viewer.ticks.length - 1];
+    if (viewer.clipSteamId) {
+      const { clip } = await get('/api/matches/' + encodeURIComponent(viewer.checksum) + '/rounds/' + roundNumber + '/clip?steamId=' + encodeURIComponent(viewer.clipSteamId));
+      if (viewer !== current || current.loadId !== loadId) return;
+      viewer.startTick = Math.max(viewer.startTick, clip.startTick);
+      viewer.endTick = Math.min(viewer.endTick, clip.endTick);
+    }
     viewer.tickFloat = viewer.startTick;
-    viewer.img = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = base() + map.radarUrl; });
-    const S = fitViewerCanvas();
+    const image = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = base() + map.radarUrl; });
+    if (viewer !== current || current.loadId !== loadId) return;
+    viewer.img = image;
+    fitViewerCanvas();
     const sl = $('vSlider'); if (sl) { sl.max = String(Math.max(0, viewer.endTick - viewer.startTick)); sl.value = '0'; }
     const b = $('vPlay'); if (b) b.textContent = 'Play';
     drawViewerFrame();
-  } catch (e) { const f = box.querySelector('#vFeed'); if (f) f.innerHTML = '<p class="muted">Viewer unavailable: ' + esc(e.message) + '</p>'; }
+  } catch (e) { if (viewer !== current || current.loadId !== loadId) return; const f = box.querySelector('#vFeed'); if (f) f.innerHTML = '<p class="muted">Viewer unavailable: ' + esc(e.message) + '</p>'; }
 }
 function viewerXY(x, y, S) {
   const t = viewer.transform;
@@ -1188,7 +1250,7 @@ function viewerSnapshot() {
   });
 }
 function drawViewerFrame() {
-  if (!viewer) return;
+  if (!viewer || !viewer.transform) return;
   const canvas = $('vCanvas');
   if (!canvas || !canvas.getContext) return;
   const S = canvas.width || 640;
@@ -1441,13 +1503,14 @@ function viewerLoop(ts) {
     drawViewerFrame();
     pauseViewer();
     const b = $('vPlay'); if (b) b.textContent = 'Replay';
+    if (viewerRecorder && viewerRecorder.state !== 'inactive') viewerRecorder.stop();
     return;
   }
   drawViewerFrame();
   viewer.raf = requestAnimationFrame(viewerLoop);
 }
 function toggleViewerPlay() {
-  if (!viewer) return;
+  if (!viewer || !viewer.ticks.length || !viewer.transform) return;
   const b = $('vPlay');
   if (viewer.playing) { pauseViewer(); if (b) b.textContent = 'Play'; return; }
   if (viewer.tickFloat >= viewer.endTick - 1) viewer.tickFloat = viewer.startTick;

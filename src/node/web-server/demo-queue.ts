@@ -1,6 +1,9 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'fs-extra';
+import { db } from 'csdm/node/database/database';
+import { insertMatchPositions } from 'csdm/node/database/matches/insert-match-positions';
+import { getDemoNameFromPath } from 'csdm/node/database/matches/match-insertion';
 import { getDemoFromFilePath } from 'csdm/node/demo/get-demo-from-file-path';
 import { analyzeDemo } from 'csdm/node/demo/analyze-demo';
 import { fetchMatchChecksums } from 'csdm/node/database/matches/fetch-match-checksums';
@@ -10,6 +13,7 @@ import { fetchMatchTable } from 'csdm/node/database/matches/fetch-match-table';
 import { fetchClutches } from 'csdm/node/database/clutches/fetch-cluches';
 import { isDiscordEnabled, sendDiscordMatchNotification } from 'csdm/node/web-server/discord';
 import { getPublicUrl } from 'csdm/node/web-server/serve-config';
+import { prepareDemoFile } from 'csdm/node/web-server/prepare-demo-file';
 
 export type QueueStatus = {
   pending: number;
@@ -67,11 +71,26 @@ async function processQueue() {
     try {
       const exists = await fs.pathExists(demoPath);
       if (!exists) {
+        upsertRecentJob(demoPath, {
+          status: 'failed',
+          error: 'Demo file no longer exists.',
+          finishedAt: new Date().toISOString(),
+        });
         continue;
       }
-      const demo = await getDemoFromFilePath(demoPath);
+      const preparedPath = await prepareDemoFile(demoPath);
+      const demo = await getDemoFromFilePath(preparedPath);
       const checksums = await fetchMatchChecksums();
-      if (checksums.includes(demo.checksum)) {
+      const existingMatch = checksums.includes(demo.checksum);
+      const positions = existingMatch
+        ? await db
+            .selectFrom('player_positions')
+            .select('id')
+            .where('match_checksum', '=', demo.checksum)
+            .limit(1)
+            .executeTakeFirst()
+        : undefined;
+      if (existingMatch && positions) {
         upsertRecentJob(demoPath, {
           status: 'analyzed',
           checksum: demo.checksum,
@@ -82,19 +101,41 @@ async function processQueue() {
       const outputFolderPath = path.join(os.tmpdir(), 'csdm-serve', demo.checksum);
       await fs.ensureDir(outputFolderPath);
       await analyzeDemo({
-        demoPath,
+        demoPath: preparedPath,
         outputFolderPath,
         source: demo.source,
         analyzePositions: true,
       });
-      await processMatchInsertion({
-        checksum: demo.checksum,
-        demoPath,
-        outputFolderPath,
-      });
+      if (existingMatch) {
+        const tables = [
+          'player_positions',
+          'grenade_positions',
+          'inferno_positions',
+          'hostage_positions',
+          'chicken_positions',
+        ] as const;
+        const clearPositions = () =>
+          Promise.all(
+            tables.map((table) => db.deleteFrom(table).where('match_checksum', '=', demo.checksum).execute()),
+          );
+        await clearPositions();
+        try {
+          await insertMatchPositions({ demoName: getDemoNameFromPath(preparedPath), outputFolderPath });
+          await db
+            .updateTable('matches')
+            .set({ demo_path: preparedPath })
+            .where('checksum', '=', demo.checksum)
+            .execute();
+        } catch (error) {
+          await clearPositions();
+          throw error;
+        }
+      } else {
+        await processMatchInsertion({ checksum: demo.checksum, demoPath: preparedPath, outputFolderPath });
+      }
       await fs.remove(outputFolderPath).catch(() => undefined);
       upsertRecentJob(demoPath, { status: 'analyzed', checksum: demo.checksum, finishedAt: new Date().toISOString() });
-      void notifyDiscord(demo.checksum);
+      if (!existingMatch) void notifyDiscord(demo.checksum);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       lastError = `${demoPath}: ${message}`;
@@ -110,7 +151,7 @@ async function processQueue() {
 }
 
 export function enqueueDemo(demoPath: string) {
-  if (!demoPath.endsWith('.dem')) {
+  if (!/\.dem(?:\.bz2)?$/i.test(demoPath)) {
     return;
   }
   if (queue.includes(demoPath)) {

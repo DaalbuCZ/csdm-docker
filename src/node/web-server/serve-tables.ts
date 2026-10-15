@@ -6,6 +6,21 @@ import { db } from 'csdm/node/database/database';
 // so the desktop app schema version stays untouched.
 export async function ensureServeTables() {
   await sql`
+    CREATE TABLE IF NOT EXISTS serve_render_jobs (
+      id TEXT PRIMARY KEY,
+      checksum TEXT NOT NULL REFERENCES matches(checksum) ON DELETE CASCADE,
+      round_number INTEGER NOT NULL,
+      steam_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      error TEXT NOT NULL DEFAULT '',
+      claim TEXT NOT NULL DEFAULT '',
+      lease_until TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (checksum, round_number, steam_id)
+    )
+  `.execute(db);
+  await sql`
     CREATE TABLE IF NOT EXISTS serve_users (
       steam_id TEXT PRIMARY KEY,
       display_name TEXT NOT NULL DEFAULT '',
@@ -25,6 +40,11 @@ export async function ensureServeTables() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `.execute(db);
+
+  await sql`ALTER TABLE serve_share_code_jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0`.execute(db);
+  await sql`ALTER TABLE serve_share_code_jobs ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ NOT NULL DEFAULT now()`.execute(
+    db,
+  );
 
   await sql`
     CREATE INDEX IF NOT EXISTS serve_share_code_jobs_status_created_at_idx

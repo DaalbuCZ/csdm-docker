@@ -32,19 +32,22 @@ async function getNextMatchSharingCode(options: {
   url.searchParams.set('steamidkey', options.authCode);
   url.searchParams.set('knowncode', options.knownCode);
 
-  const response = await request(url, { method: 'GET' });
+  const response = await request(url, { method: 'GET', signal: AbortSignal.timeout(30_000) });
   // See https://developer.valvesoftware.com/wiki/Counter-Strike:_Global_Offensive_Access_Match_History
+  if (response.statusCode !== 200 && response.statusCode !== 202) await response.body.dump();
   switch (response.statusCode) {
     case 200:
-    case 202: // 202 with an empty result means the known code is already the newest match.
       break;
+    case 202:
+      await response.body.dump();
+      return null;
     case 403:
       throw new Error(
         'Steam rejected the request (403). Check the server STEAM_API_KEY, the authentication code, and that it was generated for this Steam ID.',
       );
     case 412:
       throw new Error(
-        'Steam refused the request (412). The share code must be a matchmaking match of this account with its original letter casing (copy it exactly), and only Competitive match codes can anchor the chain — Premier match codes are rejected as a starting point by Steam.',
+        'Steam refused the request (412). Check that the authentication code and latest share code belong to this Steam account, and copy the share code with its original casing.',
       );
     case 429:
       throw new Error('Steam rate limit reached (429), try again in a few minutes.');
@@ -73,7 +76,7 @@ export async function getAllNewMatchCodes(options: ChainWalkOptions): Promise<st
       authCode: options.authCode,
       knownCode,
     });
-    if (next === null) {
+    if (next === null || next === knownCode || codes.includes(next)) {
       break;
     }
     codes.push(next);

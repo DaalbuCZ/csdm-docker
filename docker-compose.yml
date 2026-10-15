@@ -23,6 +23,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.serve
+      target: runtime
     restart: unless-stopped
     container_name: csdm-server
     depends_on:
@@ -40,6 +41,9 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
       STEAM_API_KEY: ${STEAM_API_KEY:-}
+      STEAM_REFRESH_TOKEN: ${STEAM_REFRESH_TOKEN:-}
+      STEAM_REFRESH_TOKEN_FILE: /data/steam/refresh-token
+      CLIPS_DIR: /data/clips
       TRACK_POLL_MINUTES: ${TRACK_POLL_MINUTES:-15}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       CLIP_PADDING_SECONDS: ${CLIP_PADDING_SECONDS:-6}
@@ -48,11 +52,13 @@ services:
       - '${PORT:-3000}:3000'
     volumes:
       - inbox:/data/inbox
+      - clips:/data/clips:ro
+      - steam-auth:/data/steam
     healthcheck:
       test:
         [
           'CMD-SHELL',
-          'node -e "fetch(''http://127.0.0.1:'' + (process.env.PORT || ''3000'') + ''/api/status'').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"',
+          'node -e "fetch(''http://127.0.0.1:'' + (process.env.PORT || ''3000'') + ''/health'').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"',
         ]
       interval: 30s
       timeout: 5s
@@ -62,3 +68,5 @@ services:
 volumes:
   postgres-data:
   inbox:
+  clips:
+  steam-auth:

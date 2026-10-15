@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bash
+set -euo pipefail
+# LinuxServer starts the desktop and Steam; the worker uses the same abc user.
+cd /app
+exec s6-setuidgid abc node /app/out/render-worker.cjs
