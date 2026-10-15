@@ -14,7 +14,7 @@ allowBuilds:
 catalog:
   node-gyp: 13.0.1
   vite: npm:@voidzero-dev/vite-plus-core@0.2.5
-  vitest: 4.1.10
+  vitest: 5.0.4
 
 overrides:
   node-gyp: 'catalog:'
