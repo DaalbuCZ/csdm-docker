@@ -70,13 +70,15 @@ Open the Steam desktop, sign in to Steam, and ensure the CS2 client and **Steam 
 
 The renderer consumes persisted jobs from the database. In Highlights, **Watch** selects the actual highlight window; **Record .webm** records it in the browser and stops at the end. **Render video** queues an in-game render. Completed MP4s appear under Rendered videos. Failed renders can be retried by clicking Render video again. Jobs have renewable leases so an interrupted worker does not leave them stuck forever. The worker keeps intermediate files in its private config volume and publishes completed videos to the shared clips volume.
 
-### Reuse the dedicated server installation
+### Choose the shared game installation
 
-`CS2_SERVER_DIR` defaults to `/home/byttorrent/cs2/server`, matching the existing server. Its game tree is mounted **read-only** at `/shared-cs2`. The renderer builds a private directory tree, symlinks large shared assets, and copies the launcher, executable, and gameinfo files that require a private path or modification. Its cfg, CSDM plugin, demo actions, and frame output never write into the server installation. Do not update shared game files while a render is running; use a game build compatible with the demo and CSDM plugin.
+The renderer defaults to the normal Steam client install inside its persistent config volume. `RENDER_CS2_DIR` can override that path. It still prepares a private configuration and plugin tree before recording, so the Steam installation stays unmodified by the recorder.
+
+To render with the existing dedicated server files instead, set `RENDER_CS2_DIR=/shared-cs2`. `CS2_SERVER_DIR` defaults to `/home/byttorrent/cs2/server`, matching the existing server. Its game tree is mounted **read-only** at `/shared-cs2`. The renderer builds a private directory tree, symlinks large shared assets, and copies the launcher, executable, and gameinfo files that require a private path or modification. Its cfg, CSDM plugin, demo actions, and frame output never write into the server installation. Do not update shared game files while a render is running; use a game build compatible with the demo and CSDM plugin.
 
 The dedicated server's `game/csgo` directory is also mounted read-only as `/data/server-demos` in the app and worker, allowing completed server recordings to be analyzed automatically. If your server writes demos elsewhere, adjust this bind mount and `SERVER_DEMOS_DIR`. A separate writable inbox remains available for uploads and Valve downloads.
 
-The server install must contain `game/cs2.sh`, `game/bin/linuxsteamrt64/cs2`, and the client assets. If a dedicated-only depot lacks graphical client assets, install the client in the worker's Steam desktop and remove `SHARED_CS2_DIR` to use that installation instead. A second writable mount of the dedicated server's game tree is not needed.
+The server install must contain `game/cs2.sh`, `game/bin/linuxsteamrt64/cs2`, and the client assets. If a dedicated-only depot lacks graphical client assets, install the client in the worker's Steam desktop and use the default `RENDER_CS2_DIR` to render from that installation instead. A second writable mount of the dedicated server's game tree is not needed.
 
 ### Export for an existing CSDM installation
 

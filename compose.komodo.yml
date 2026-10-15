@@ -63,7 +63,7 @@ services:
       POSTGRES_DB: csdm
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a database password}
       CLIPS_DIR: /data/clips
-      SHARED_CS2_DIR: /shared-cs2
+      SHARED_CS2_DIR: ${RENDER_CS2_DIR:-/config/.local/share/Steam/steamapps/common/Counter-Strike Global Offensive}
       CUSTOM_USER: csdm
       PASSWORD: ${RENDER_DESKTOP_PASSWORD:?Set a Steam desktop password}
       DRINODE: /dev/dri/renderD128
