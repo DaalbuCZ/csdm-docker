@@ -67,6 +67,7 @@ services:
       CUSTOM_USER: csdm
       PASSWORD: ${RENDER_DESKTOP_PASSWORD:?Set a Steam desktop password}
       DRINODE: /dev/dri/renderD128
+      DISPLAY: :0
     devices:
       - /dev/dri:/dev/dri
     shm_size: 2gb
