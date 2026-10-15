@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { analyzeDemo, type Options as AnalyzeOptions } from '@akiver/cs-demo-analyzer';
+import { analyzeDemo, DemoSource, type Options as AnalyzeOptions } from '@akiver/cs-demo-analyzer';
 import { getStaticFolderPath } from 'csdm/node/filesystem/get-static-folder-path';
 import { isWindows } from 'csdm/node/os/is-windows';
 import { CorruptedDemoError } from './corrupted-demo-error';
@@ -13,6 +13,7 @@ export async function runDemoAnalyzer(
 
   await analyzeDemo({
     ...options,
+    source: options.source === DemoSource.Unknown ? undefined : options.source,
     executablePath,
     format: 'csdm',
     onStderr: (data) => {

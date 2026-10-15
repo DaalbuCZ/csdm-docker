@@ -48,6 +48,6 @@ COPY --from=build /usr/local/bin/node /usr/local/bin/node
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/out ./out
 COPY --from=build /app/static ./static
-COPY docker/renderer/run /custom-services.d/csdm/run
+COPY docker/renderer/run /custom-services.d/csdm
 COPY docker/renderer/init /custom-cont-init.d/10-csdm
 ENV CSDM_LOG_STDOUT=1
