@@ -47,6 +47,7 @@ services:
       - ${CS2_SERVER_DIR:-/home/byttorrent/cs2/server}/game/csgo:/data/server-demos:ro
 
   renderer:
+    profiles: [rendering]
     build:
       context: .
       dockerfile: Dockerfile.serve
