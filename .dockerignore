@@ -1,0 +1,14 @@
+node_modules
+out
+dist
+.git
+inbox
+.env
+*.dem
+*.vdm
+
+.env.*
+!.env.example
+.agents
+.codex
+.aws

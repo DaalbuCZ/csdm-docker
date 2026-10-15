@@ -1,0 +1,33 @@
+node_modules
+.DS_Store
+thumbs.db
+dist
+out
+.env
+*.dem
+*.vdm
+*.pdb
+*.exp
+*.lib
+linter/*.js
+static/*.exe
+static/csda
+static/boiler-writter
+static/csgove
+static/changelog
+build
+!build/Release/*.node
+*.local.json
+
+# Only the English source catalogs are committed. The other locales are managed on
+# Crowdin and downloaded at build time.
+src/ui/translations/*
+!src/ui/translations/en
+src/electron-main/translations/*
+!src/electron-main/translations/en
+
+# Local deployment data and secrets
+.env.*
+!.env.example
+inbox/
+*.log
