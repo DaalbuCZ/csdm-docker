@@ -281,14 +281,14 @@ export async function startWebServer(options: WebServerOptions) {
         return;
       }
 
-      if (!url.pathname.startsWith('/api/')) {
-        sendJson(response, 404, { error: 'Not found' });
-        return;
-      }
-
       if (request.method === 'GET' && url.pathname === '/health') {
         await sql`SELECT 1`.execute(db);
         sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (!url.pathname.startsWith('/api/')) {
+        sendJson(response, 404, { error: 'Not found' });
         return;
       }
 
