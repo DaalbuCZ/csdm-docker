@@ -151,6 +151,7 @@ export async function startWebServer(options: WebServerOptions) {
 
   const watcher = watch([inboxFolderPath, ...(process.env.SERVER_DEMOS_DIR ? [process.env.SERVER_DEMOS_DIR] : [])], {
     ignoreInitial: false,
+    ignored: (filePath, stats) => Boolean(stats?.isFile() && !/\.dem(?:\.bz2)?$/i.test(filePath)),
     awaitWriteFinish: {
       stabilityThreshold: 2000,
       pollInterval: 500,
