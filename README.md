@@ -81,3 +81,11 @@ The server install must contain `game/cs2.sh`, `game/bin/linuxsteamrt64/cs2`, an
 ### Export for an existing CSDM installation
 
 The video config export contains complete CSDM `Sequence` objects, including player focus, and can be used with `csdm video --config-file <file>`. Download the original demo from `/api/matches/<checksum>/demo` beside the config, named `<checksum>.dem`. Analyze it in the local CSDM database first. The built-in worker handles this automatically through the shared database and volumes.
+
+### Private Tailscale access
+
+Add `compose.tailscale.yml` after `compose.komodo.yml` in Komodo's File Paths. The overlay adds a dedicated Tailscale node and a proxy sharing its network namespace. It publishes no additional host ports, uses userspace networking without host networking or extra capabilities, and leaves the existing host Tailscale setup intact.
+
+On first startup, open the authentication URL from the `tailscale` service logs and approve `csdm-docker` in the tailnet used by your computer. Its identity persists in `tailscale-state`. The logs show the assigned DNS name; HTTPS must be enabled in that tailnet. Open `https://<assigned-name>/` for the app and `https://<assigned-name>:8443/` for the Steam desktop. Existing API/session authentication and desktop credentials still apply. Funnel is not enabled.
+
+Set `PUBLIC_URL` in the stack Environment to the app's HTTPS URL before using Steam web login, then redeploy. Tailscale ACLs must permit ports 443 and 8443. Direct connections to the server's LAN address on ports 3300–3302 still use the base stack's loopback-only bindings.

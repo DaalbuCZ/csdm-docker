@@ -1,0 +1,32 @@
+# Add after compose.komodo.yml to enable private tailnet access.
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    hostname: csdm-docker
+    restart: unless-stopped
+    environment:
+      TS_HOSTNAME: csdm-docker
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: 'true'
+      TS_AUTH_ONCE: 'true'
+      TS_SERVE_CONFIG: /etc/tailscale/serve.json
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./docker/tailscale/serve.json:/etc/tailscale/serve.json:ro
+
+  tailnet-proxy:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    network_mode: service:tailscale
+    depends_on:
+      tailscale:
+        condition: service_started
+      app:
+        condition: service_healthy
+      renderer:
+        condition: service_started
+    volumes:
+      - ./docker/tailscale/nginx.conf:/etc/nginx/nginx.conf:ro
+
+volumes:
+  tailscale-state:
